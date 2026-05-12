@@ -127,12 +127,14 @@ Run the Repo Detection Preamble to ensure you are in the TransformerEngine-FL di
 - `transformer_engine/plugin/core/ops.py` — base class `TEFLBackendBase` with abstract method stubs for every op
 - Vendor backend implementations (one per vendor, each delegating to its own `tex` module):
   - `transformer_engine/plugin/core/backends/vendor/cuda/cuda.py` — `CUDABackend`, tex = `transformer_engine_torch_nv`
+  - `transformer_engine/plugin/core/backends/vendor/enflame/enflame.py` — `EnflameBackend`, tex = `migration.patches.transformer_engine.v2_9_0`
   - `transformer_engine/plugin/core/backends/vendor/iluvatar/iluvatar.py` — `IluvatarBackend`, tex = `transformer_engine_iluvatar.pytorch.ixte_torch`
   - `transformer_engine/plugin/core/backends/vendor/metax/metax.py` — `MetaxBackend`, tex = `transformer_engine_torch_metax`
   - `transformer_engine/plugin/core/backends/vendor/musa/musa.py` — `MUSABackend`, tex = `transformer_engine_musa_torch`
   - `transformer_engine/plugin/core/backends/vendor/hygon/hygon.py` — `HygonBackend`, tex = `transformer_engine_torch_hygon`
 - Vendor `register_ops.py` files (one per vendor, containing `OpImpl` registrations):
   - `transformer_engine/plugin/core/backends/vendor/cuda/register_ops.py`
+  - `transformer_engine/plugin/core/backends/vendor/enflame/register_ops.py`
   - `transformer_engine/plugin/core/backends/vendor/iluvatar/register_ops.py`
   - `transformer_engine/plugin/core/backends/vendor/metax/register_ops.py`
   - `transformer_engine/plugin/core/backends/vendor/musa/register_ops.py`
@@ -383,6 +385,7 @@ Each vendor follows the identical pattern — only the class name, `tex` module,
 | Vendor   | Class            | tex module                                      | impl_id           | vendor string |
 |----------|------------------|------------------------------------------------|--------------------|---------------|
 | CUDA     | `CUDABackend`    | `transformer_engine_torch_nv`                  | `vendor.cuda`      | `NVIDIA`      |
+| Enflame  | `EnflameBackend` | `migration.patches.transformer_engine.v2_9_0`  | `vendor.enflame`   | `ENFLAME`     |
 | Iluvatar | `IluvatarBackend`| `transformer_engine_iluvatar.pytorch.ixte_torch`| `vendor.iluvatar`  | `Iluvatar`    |
 | MetaX    | `MetaxBackend`   | `transformer_engine_torch_metax`               | `vendor.metax`     | `METAX`       |
 | MUSA     | `MUSABackend`    | `transformer_engine_musa_torch`                | `vendor.musa`      | `MUSA`        |
@@ -399,9 +402,55 @@ you can write a batch script to apply the same changes across all vendors simult
 than editing each file manually. Diff the CUDA register_ops op_names against each vendor's to
 identify exactly which ops are missing.
 
+**Note on Enflame:** Enflame's `tex` module is `migration.patches.transformer_engine.v2_9_0`
+(loaded lazily via `_get_tex()`). It also has a custom `flash_attention.py` and
+`get_attention_backend` implementation that routes through its own migration layer. When adding
+new ops, follow the same delegation pattern as other vendors.
+
 **Note on Hygon:** Hygon may have a pre-existing gap in OpImpl count compared to other vendors
 (e.g., 8 fewer ops). This is expected — only add the new ops from this sync, don't try to
 backfill the pre-existing gap.
+
+**Critical: Explicit parameter signatures required.** All vendor backend methods MUST use
+explicit parameter lists matching the CUDA backend exactly. Do NOT use `*args, **kwargs` as a
+shortcut — this hides interface mismatches and causes silent failures when upstream adds new
+parameters. The only exceptions are methods where CUDA itself uses `*args, **kwargs` (e.g.,
+`te_general_grouped_gemm_for_*`, `nvfp4_compute_per_block_scale`, `nvfp4_expand_scale_to_fp8`,
+`nvfp4_fused_scale`, `nvfp4_multi_tensor_2d_partial_cast`).
+
+Example — correct:
+```python
+def mxfp8_scaling_compute_partial_amax(
+    self,
+    tensor: torch.Tensor,
+    amax: torch.Tensor,
+    h: int,
+    w: int,
+    start_offset: int,
+    block_len: int,
+) -> None:
+    tex = self._get_tex()
+    return tex.mxfp8_scaling_compute_partial_amax(tensor, amax, h, w, start_offset, block_len)
+```
+
+Example — wrong (do not do this):
+```python
+def mxfp8_scaling_compute_partial_amax(self, *args, **kwargs):
+    tex = self._get_tex()
+    return tex.mxfp8_scaling_compute_partial_amax(*args, **kwargs)
+```
+
+After adding/modifying methods in all vendors, verify consistency:
+```bash
+# Verify no new *args/**kwargs were introduced (excluding known exceptions)
+for vendor in enflame hygon iluvatar metax musa; do
+  f="transformer_engine/plugin/core/backends/vendor/$vendor/$vendor.py"
+  echo "=== $vendor ==="
+  grep -n "def.*\*args.*\*\*kwargs" "$f" | \
+    grep -v "te_general_grouped_gemm_for_\|nvfp4_compute_per_block_scale\|nvfp4_expand_scale_to_fp8\|nvfp4_fused_scale\|nvfp4_multi_tensor_2d_partial_cast"
+done
+# If any output appears, those methods need explicit parameter lists from CUDA.
+```
 
 #### Step 5d: Scan flagos and reference backends for changed interfaces
 
@@ -505,7 +554,7 @@ comm -23 <(echo "$ALL_CSRC_APIS") <(echo "$ALL_OPS_METHODS")
 # 6d: Verify all vendor backends have the same method count as CUDA reference
 echo ""
 echo "=== Vendor backend method counts (should match CUDA) ==="
-for vendor in cuda iluvatar metax musa hygon; do
+for vendor in cuda enflame iluvatar metax musa hygon; do
     VENDOR_FILE="transformer_engine/plugin/core/backends/vendor/$vendor/$vendor.py"
     if [ -f "$VENDOR_FILE" ]; then
         COUNT=$(grep -c "^\s*def " "$VENDOR_FILE" 2>/dev/null)
@@ -518,7 +567,7 @@ done
 # 6e: Verify all vendor register_ops have consistent OpImpl counts
 echo ""
 echo "=== Vendor register_ops OpImpl counts ==="
-for vendor in cuda iluvatar metax musa hygon; do
+for vendor in cuda enflame iluvatar metax musa hygon; do
     REG_FILE="transformer_engine/plugin/core/backends/vendor/$vendor/register_ops.py"
     if [ -f "$REG_FILE" ]; then
         COUNT=$(grep -c "op_name" "$REG_FILE" 2>/dev/null)
@@ -547,6 +596,8 @@ echo "=== Syntax validation ==="
 for f in transformer_engine/plugin/core/ops.py \
          transformer_engine/plugin/core/backends/vendor/cuda/cuda.py \
          transformer_engine/plugin/core/backends/vendor/cuda/register_ops.py \
+         transformer_engine/plugin/core/backends/vendor/enflame/enflame.py \
+         transformer_engine/plugin/core/backends/vendor/enflame/register_ops.py \
          transformer_engine/plugin/core/backends/vendor/iluvatar/iluvatar.py \
          transformer_engine/plugin/core/backends/vendor/iluvatar/register_ops.py \
          transformer_engine/plugin/core/backends/vendor/metax/metax.py \
@@ -591,6 +642,7 @@ changes to `FusedAttention.forward()` do not require plugin changes.
 **Files to update:**
 - `transformer_engine/plugin/core/ops.py` — `FlashAttentionBase._forward_impl` + `forward` signatures
 - `transformer_engine/plugin/core/backends/vendor/cuda/flash_attention.py`
+- `transformer_engine/plugin/core/backends/vendor/enflame/flash_attention.py`
 - `transformer_engine/plugin/core/backends/vendor/hygon/flash_attention.py`
 - `transformer_engine/plugin/core/backends/vendor/metax/flash_attention.py`
 - `transformer_engine/plugin/core/backends/vendor/musa/flash_attention.py`
@@ -671,7 +723,7 @@ For each vendor's `flash_attention.py`:
 ```bash
 # Check all vendor flash_attention files for current _forward_impl signatures
 echo "=== Vendor FlashAttention _forward_impl signatures ==="
-for vendor in cuda hygon metax musa iluvatar kunlunxin; do
+for vendor in cuda enflame hygon metax musa iluvatar kunlunxin; do
     FILE="transformer_engine/plugin/core/backends/vendor/$vendor/flash_attention.py"
     if [ -f "$FILE" ]; then
         echo "--- $vendor ---"
@@ -743,7 +795,7 @@ git diff HEAD -- transformer_engine/plugin/core/ops.py >> "$LOG_FILE"
 echo "" >> "$LOG_FILE"
 
 echo "--- Vendor backend changes ---" >> "$LOG_FILE"
-for vendor in cuda iluvatar metax musa hygon; do
+for vendor in cuda enflame iluvatar metax musa hygon; do
     echo "=== $vendor ===" >> "$LOG_FILE"
     git diff HEAD -- "transformer_engine/plugin/core/backends/vendor/$vendor/" >> "$LOG_FILE"
     echo "" >> "$LOG_FILE"
@@ -760,9 +812,9 @@ Updated plugin OP API layer to match pytorch/csrc/ pybind changes
 between base and dev branches. Changes applied to:
 - ops.py base class (TEFLBackendBase)
 - ops.py FlashAttentionBase (synced forward/\_forward\_impl signatures with upstream FlashAttention)
-- All vendor FlashAttention subclasses (cuda, hygon, metax, musa, iluvatar, kunlunxin)
-- All 5 vendor backends (cuda, iluvatar, metax, musa, hygon)
-- All 5 vendor register_ops.py files
+- All vendor FlashAttention subclasses (cuda, enflame, hygon, metax, musa, iluvatar, kunlunxin)
+- All 6 vendor backends (cuda, enflame, iluvatar, metax, musa, hygon)
+- All 6 vendor register_ops.py files
 - Scanned flagos/reference backends for changed interfaces
 See /tmp/plugin_api_changes.log for details."
 ```

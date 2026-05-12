@@ -84,8 +84,8 @@ between upstream callers and plugin wrappers), fix them immediately. After fixin
 
 3. **Re-run the failing test** to verify the fix before proceeding to the next level.
 
-Remember: fixes should cover ALL vendor backends (cuda, hygon, iluvatar, metax, musa), not just the
-one being tested. Check ops.py (abstract method) + all 5 vendor backend files.
+Remember: fixes should cover ALL vendor backends (cuda, enflame, hygon, iluvatar, metax, musa), not just the
+one being tested. Check ops.py (abstract method) + all 6 vendor backend files.
 
 ---
 
@@ -275,4 +275,4 @@ If a combination fails, diagnose using these common patterns:
 | Plugin dispatch error | Missing op registration | Add to register_ops.py for all vendors |
 
 After each fix: pre-commit, commit, rebuild (`pip install -e . --no-build-isolation`), then rerun
-the same combination to verify. Apply fixes to ALL vendor backends (cuda, musa, iluvatar, hygon, metax).
+the same combination to verify. Apply fixes to ALL vendor backends (cuda, enflame, musa, iluvatar, hygon, metax).
