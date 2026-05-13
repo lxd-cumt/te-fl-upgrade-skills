@@ -5,6 +5,57 @@ each building on the previous. If any level fails, stop and diagnose before proc
 
 Run the Repo Detection Preamble to ensure you are in the TransformerEngine-FL directory.
 
+#### Pre-check: CI Script Validation
+
+Before running any tests, verify that the CI scripts in `qa/` reference test files that actually
+exist. Upstream renames test files between releases (e.g. `test_float8tensor.py` →
+`test_quantized_tensor.py`), and the TE-FL CI scripts may not have been updated to match.
+
+Run this check:
+
+```bash
+# Extract all .py test file references from qa/L0_pytorch_unittest/test.sh and verify they exist
+grep -oP '(?<=\$TE_PATH/)tests/pytorch/[^\s"]+\.py' qa/L0_pytorch_unittest/test.sh | sort -u | while read f; do
+  if [ ! -f "$f" ]; then
+    echo "MISSING: $f"
+  fi
+done
+# Also check directory references (e.g. nvfp4/)
+grep -oP '(?<=\$TE_PATH/)tests/pytorch/[^\s"]+(?<!\.py)(?=")' qa/L0_pytorch_unittest/test.sh | sort -u | while read d; do
+  if [ ! -e "$d" ]; then
+    echo "MISSING DIR: $d"
+  fi
+done
+```
+
+If any files are reported as MISSING:
+
+1. Check if the file was renamed upstream:
+   ```bash
+   git log --oneline --all --diff-filter=R --summary -- <missing-file> | head -5
+   ```
+2. Update the CI script to use the new filename.
+3. Also check whether new test files exist in `tests/pytorch/` that are not yet referenced in the
+   CI script — compare against the upstream version of `qa/L0_pytorch_unittest/test.sh`:
+   ```bash
+   git show upstream/main:qa/L0_pytorch_unittest/test.sh | grep -oP 'tests/pytorch/[^\s"]+\.py' | sort > /tmp/upstream_tests.txt
+   grep -oP '(?<=\$TE_PATH/)tests/pytorch/[^\s"]+\.py' qa/L0_pytorch_unittest/test.sh | sort > /tmp/local_tests.txt
+   diff /tmp/upstream_tests.txt /tmp/local_tests.txt
+   ```
+   Lines prefixed with `<` are in upstream but missing locally — add them if the files exist.
+
+4. Fix any issues, run `pre-commit run --files qa/L0_pytorch_unittest/test.sh`, and commit before
+   proceeding to the test levels below.
+
+**Also check for tests that are in the skip list but never actually run** — a test appearing only
+in the MetaX/CUDA skip block but not in any `run_test_step` call is a sign it was added to the
+skip list when the test was introduced upstream, but the `run_test_step` call was never added.
+
+**Known patterns to watch for after each upstream sync:**
+- Test file renames (check `git log --diff-filter=R` on the upstream merge commit)
+- New test files added under `tests/pytorch/` or `tests/pytorch/attention/`
+- Tests moved into subdirectories (e.g. `test_attention.py` → `attention/test_attention.py`)
+
 #### Per-Level Results Table
 
 After each level finishes, parse the test output and display a results table to the console.

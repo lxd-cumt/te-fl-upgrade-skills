@@ -94,7 +94,7 @@ After the workflow completes (success or failure), generate a report. Use the sc
 | 5. Patch CUDA hardcoding | ✅/❌ | |
 | 6. Detect & fix stale references | ✅/❌ | N stale refs found/fixed |
 | 7. Build & import verification | ✅/❌ | |
-| 8. Unit & integration tests | ✅/❌ | |
+| 8. Unit & integration tests | ✅/❌ | CI script validation: N missing refs fixed, N tests added |
 | 9. Merge to main | ✅/❌ | tree replacement merge, PR opened |
 | 10. FlagScale training validation | ✅/❌ | N/M combinations passed (see batch comparison table) |
 
