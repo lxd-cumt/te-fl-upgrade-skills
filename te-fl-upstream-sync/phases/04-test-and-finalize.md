@@ -184,6 +184,23 @@ definition and backend implementations were not updated to match.
 
 **→ Display Level 2.5 results table, then continue.**
 
+#### Level 2.6 — Plugin Unit Tests (`run_all_tests.py`)
+
+Run the plugin's own test suite, which validates backend registration, op dispatch, and
+plugin-layer correctness independently of the upstream pytorch tests.
+
+```bash
+cd "$TE_FL_DIR"
+python transformer_engine/plugin/tests/run_all_tests.py 2>&1 | tee plugin-run-all.log
+```
+
+If tests fail, check for:
+- Missing op registrations in `transformer_engine/plugin/core/register_ops.py`
+- Backend method not implemented (raises `NotImplementedError`)
+- Import errors caused by renamed or removed upstream symbols
+
+**→ Display Level 2.6 results table, then continue.**
+
 #### Level 3 — End-to-End Tests
 ```bash
 python tests/pytorch/test_sanity.py 2>&1 | tee e2e-test.log
@@ -203,6 +220,7 @@ After all levels complete (or on first failure), display the cumulative summary 
 | L2.5a | L0 Debug Unit Tests | ✅/❌ | N | N | N | Xs |
 | L2.5b | L0 PyTorch Unit Tests | ✅/❌ | N | N | N | Xs |
 | L2.5c | L1 Distributed Tests | ✅/❌ | N | N | N | Xs |
+| L2.6 | Plugin Unit Tests | ✅/❌ | N | N | N | Xs |
 | L3 | End-to-End | ✅/❌ | N | N | N | Xs |
 | | **Total** | | **N** | **N** | **N** | **Xs** |
 
