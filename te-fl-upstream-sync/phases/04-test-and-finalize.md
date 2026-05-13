@@ -91,15 +91,20 @@ pytest tests/pytorch/ -v --tb=short 2>&1 | tee integration-test.log
 
 **→ Display Level 2 results table, then continue.**
 
-#### Level 2.5 — L0 PyTorch Unit Tests (OP API Validation)
+#### Level 2.5 — CI Test Suites (OP API Validation)
 
-This level runs the CI test suite `qa/L0_pytorch_unittest/test.sh`, which validates the plugin OP API
-interfaces across all vendor backends. This is critical after upstream merges because upstream may
-change function signatures in ways that break the plugin dispatch layer.
+This level runs three CI test suites in sequence: debug → unit → distributed. These validate the
+plugin OP API interfaces across all vendor backends. This is critical after upstream merges because
+upstream may change function signatures in ways that break the plugin dispatch layer.
 
 ```bash
 cd "$TE_FL_DIR"
+# L0 Debug tests
+TE_PATH=$(pwd) bash qa/L0_pytorch_debug_unittest/test.sh 2>&1 | tee l0-debug.log
+# L0 Unit tests
 TE_PATH=$(pwd) bash qa/L0_pytorch_unittest/test.sh 2>&1 | tee l0-unittest.log
+# L1 Distributed tests
+TE_PATH=$(pwd) bash qa/L1_pytorch_distributed_unittest/test.sh 2>&1 | tee l1-distributed.log
 ```
 
 **Common failure pattern: OP API signature mismatch**
@@ -170,9 +175,11 @@ definition and backend implementations were not updated to match.
    Updated abstract method in ops.py and all vendor backend implementations."
    ```
 
-8. **Re-run the L0 tests** to verify the fix:
+8. **Re-run all three CI test suites** to verify the fix:
    ```bash
+   TE_PATH=$(pwd) bash qa/L0_pytorch_debug_unittest/test.sh 2>&1 | tee l0-debug-rerun.log
    TE_PATH=$(pwd) bash qa/L0_pytorch_unittest/test.sh 2>&1 | tee l0-unittest-rerun.log
+   TE_PATH=$(pwd) bash qa/L1_pytorch_distributed_unittest/test.sh 2>&1 | tee l1-distributed-rerun.log
    ```
 
 **→ Display Level 2.5 results table, then continue.**
@@ -193,7 +200,9 @@ After all levels complete (or on first failure), display the cumulative summary 
 |-------|-----------|--------|--------|--------|---------|----------|
 | L1 | Plugin Tests | ✅/❌ | N | N | N | Xs |
 | L2 | Integration | ✅/❌ | N | N | N | Xs |
-| L2.5 | L0 PyTorch Unit Tests | ✅/❌ | N | N | N | Xs |
+| L2.5a | L0 Debug Unit Tests | ✅/❌ | N | N | N | Xs |
+| L2.5b | L0 PyTorch Unit Tests | ✅/❌ | N | N | N | Xs |
+| L2.5c | L1 Distributed Tests | ✅/❌ | N | N | N | Xs |
 | L3 | End-to-End | ✅/❌ | N | N | N | Xs |
 | | **Total** | | **N** | **N** | **N** | **Xs** |
 
