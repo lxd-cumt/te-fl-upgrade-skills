@@ -91,6 +91,92 @@ pytest tests/pytorch/ -v --tb=short 2>&1 | tee integration-test.log
 
 **→ Display Level 2 results table, then continue.**
 
+#### Level 2.5 — L0 PyTorch Unit Tests (OP API Validation)
+
+This level runs the CI test suite `qa/L0_pytorch_unittest/test.sh`, which validates the plugin OP API
+interfaces across all vendor backends. This is critical after upstream merges because upstream may
+change function signatures in ways that break the plugin dispatch layer.
+
+```bash
+cd "$TE_FL_DIR"
+TE_PATH=$(pwd) bash qa/L0_pytorch_unittest/test.sh 2>&1 | tee l0-unittest.log
+```
+
+**Common failure pattern: OP API signature mismatch**
+
+If tests fail with errors like:
+- `CUDABackend.fused_topk_with_score_function_bwd() takes 10 positional arguments but 11 were given`
+- `CUDABackend.fused_score_for_moe_aux_loss_bwd() got an unexpected keyword argument 'grad_logits'`
+
+This indicates that the upstream pytorch layer changed the call signature, but the plugin OP API
+definition and backend implementations were not updated to match.
+
+**Fix procedure:**
+
+1. **Identify the failing OP** from the error message (e.g., `fused_topk_with_score_function_bwd`)
+
+2. **Check the upstream caller** to see the expected signature:
+   ```bash
+   grep -n "tex.fused_topk_with_score_function_bwd" transformer_engine/pytorch/router.py
+   ```
+   Note all parameters being passed, including output tensors like `grad_logits`.
+
+3. **Check the C++ extension signature** to confirm the expected interface:
+   ```bash
+   grep -A 10 "void fused_topk_with_score_function_bwd" transformer_engine/pytorch/csrc/extensions/router.cpp
+   ```
+
+4. **Update the OP API abstract method** in `transformer_engine/plugin/core/ops.py`:
+   - Add any missing parameters (e.g., `grad_logits: torch.Tensor`)
+   - Ensure parameter order matches the upstream caller
+
+5. **Update ALL backend implementations** (not just CUDA):
+   ```bash
+   # Find all backends that implement this OP
+   find transformer_engine/plugin/core/backends -name "*.py" | xargs grep -l "def fused_topk_with_score_function_bwd"
+   ```
+   
+   For each backend file found:
+   - Add the missing parameter to the function signature
+   - Pass it through to the underlying `tex.*` call
+   
+   **Backends to check:**
+   - `vendor/cuda/cuda.py`
+   - `vendor/hygon/hygon.py`
+   - `vendor/metax/metax.py`
+   - `vendor/enflame/enflame.py`
+   - `vendor/iluvatar/iluvatar.py`
+   - `vendor/musa/musa.py`
+   - `flagos/flagos.py` (if the OP is implemented)
+   - `reference/reference.py` (if the OP is implemented)
+
+6. **Run pre-commit** on all modified files:
+   ```bash
+   pre-commit run --files transformer_engine/plugin/core/ops.py \
+     transformer_engine/plugin/core/backends/vendor/cuda/cuda.py \
+     transformer_engine/plugin/core/backends/vendor/hygon/hygon.py \
+     transformer_engine/plugin/core/backends/vendor/metax/metax.py \
+     transformer_engine/plugin/core/backends/vendor/enflame/enflame.py \
+     transformer_engine/plugin/core/backends/vendor/iluvatar/iluvatar.py \
+     transformer_engine/plugin/core/backends/vendor/musa/musa.py
+   ```
+
+7. **Commit the fix**:
+   ```bash
+   git add transformer_engine/plugin/core/ops.py transformer_engine/plugin/core/backends/vendor/*/
+   git commit -m "fix(plugin): update OP API signatures for <op_name>
+
+   Upstream changed the call signature to include <new_parameter>.
+   Updated abstract method in ops.py and all vendor backend implementations."
+   ```
+
+8. **Re-run the L0 tests** to verify the fix:
+   ```bash
+   TE_PATH=$(pwd) bash qa/L0_pytorch_unittest/test.sh 2>&1 | tee l0-unittest-rerun.log
+   ```
+
+**→ Display Level 2.5 results table, then continue.**
+
 #### Level 3 — End-to-End Tests
 ```bash
 python tests/pytorch/test_sanity.py 2>&1 | tee e2e-test.log
@@ -107,6 +193,7 @@ After all levels complete (or on first failure), display the cumulative summary 
 |-------|-----------|--------|--------|--------|---------|----------|
 | L1 | Plugin Tests | ✅/❌ | N | N | N | Xs |
 | L2 | Integration | ✅/❌ | N | N | N | Xs |
+| L2.5 | L0 PyTorch Unit Tests | ✅/❌ | N | N | N | Xs |
 | L3 | End-to-End | ✅/❌ | N | N | N | Xs |
 | | **Total** | | **N** | **N** | **N** | **Xs** |
 
